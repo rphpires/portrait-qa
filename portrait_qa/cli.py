@@ -132,9 +132,10 @@ def cmd_install(args) -> int:
         api_key = generate_key()
     state = SetupState(network=network, port=args.port or current.port, api_key=api_key, firewall=not args.no_firewall)
     try:
-        ctl.apply(state, lambda key, params: print(f"{key} {params or ''}".strip(), file=sys.stderr))
+        ctl.apply(state, lambda key, params: print(" ".join([key, *map(str, params.values())]), file=sys.stderr))
     except SetupError as exc:
-        print(f"error: {exc.key} {exc.params}", file=sys.stderr)
+        details = ", ".join(f"{k}={v}" for k, v in exc.params.items() if v not in (None, ""))
+        print(f"error: {exc.key}" + (f" ({details})" if details else ""), file=sys.stderr)
         return 2
     except winsvc.ServiceError as exc:
         print(f"error: {exc}", file=sys.stderr)

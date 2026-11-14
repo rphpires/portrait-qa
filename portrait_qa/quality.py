@@ -53,7 +53,7 @@ class QualityThresholds:
     min_score: int = 60
     min_confidence: float = 0.75
     min_eye_distance_px: float = 40  # below: error FACE_TOO_SMALL
-    good_eye_distance_px: float = 90  # below: warning LOW_RESOLUTION (90 px is the ICAO recommendation)
+    good_eye_distance_px: float = 90  # below: warning LOW_RESOLUTION (a commonly cited minimum for ID portraits)
     secondary_face_ratio: float = 0.35  # another face at least this wide (vs. the main one) = MULTIPLE_FACES
     max_yaw_ratio: float = 0.35
     min_sharpness: float = 15.0  # variance of the Laplacian on the face, normalized in size and contrast
