@@ -87,16 +87,16 @@ def cmd_batch(args) -> int:
         writer = csv.writer(fh)
         writer.writerow(["file", "passed", "score", "faces", "issues", "cropped", "error"])
         for i, path in enumerate(files, 1):
-            rel = path.relative_to(src)
+            rel = path.relative_to(src).as_posix()  # same report on Windows and Linux
             try:
                 result = engine.run(path.read_bytes(), mode=mode, profile=args.profile)
                 r = result.report
                 cropped = ""
                 if result.crop is not None and out_dir:
-                    target = (out_dir / rel).with_suffix(".jpg")
+                    target = (out_dir / path.relative_to(src)).with_suffix(".jpg")
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(result.crop.jpeg)
-                    cropped = str(target.relative_to(out_dir))
+                    cropped = target.relative_to(out_dir).as_posix()
                 writer.writerow([rel, r.passed, r.score, r.faces, " ".join(x.code for x in r.issues), cropped, ""])
                 counts["passed" if r.passed else "failed"] += 1
             except (PortraitQAError, OSError) as exc:

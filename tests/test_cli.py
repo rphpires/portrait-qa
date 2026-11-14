@@ -47,7 +47,7 @@ def test_batch(tmp_path, variants, capsys):
     assert summary == {"files": 4, "passed": 1, "failed": 2, "error": 1, "report": str(out / "portrait-qa-report.csv")}
     rows = {r["file"]: r for r in csv.DictReader((out / "portrait-qa-report.csv").open(encoding="utf-8"))}
     assert rows["good.png"]["cropped"] == "good.jpg" and (out / "good.jpg").exists()
-    assert "BLURRY" in rows["sub/blurry.jpg"]["issues"].split() or "BLURRY" in rows["sub\\blurry.jpg"]["issues"]
+    assert "BLURRY" in rows["sub/blurry.jpg"]["issues"].split()
     assert rows["broken.jpg"]["error"].startswith("INVALID_IMAGE")
 
 
