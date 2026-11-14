@@ -5,6 +5,7 @@ Uses pywin32 (Windows only). Every function here raises ``ServiceError`` with a 
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -128,6 +129,8 @@ def install_or_update(config_path: Path) -> str:
                     ],
                 },
             )
+            # Also apply those actions when the service stops itself with an error (not only on crashes).
+            win32service.ChangeServiceConfig2(handle, win32service.SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, True)
         finally:
             win32service.CloseServiceHandle(handle)
         return action
@@ -219,9 +222,13 @@ def run_dispatcher(config_path: Path | None) -> int:
         def __init__(self, args):
             super().__init__(args)
             self.server = None
+            self.stop_requested = False
 
         def SvcStop(self):  # noqa: N802 - pywin32 API
             self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
+            # A stop can arrive while SvcDoRun is still loading the config / model: remember it. SvcDoRun checks
+            # the flag right after creating the server, so one of the two always sees the other.
+            self.stop_requested = True
             if self.server is not None:
                 self.server.should_exit = True
 
@@ -236,6 +243,8 @@ def run_dispatcher(config_path: Path | None) -> int:
                 setup_logging(settings.log_level, folder=cfg_path.resolve().parent / "logs", to_console=False)
                 log.info("Service starting with %s", cfg_path)
                 self.server = build_server(settings)
+                if self.stop_requested:
+                    self.server.should_exit = True
                 try:
                     self.server.run()
                 except SystemExit:  # uvicorn exits the process when it cannot bind
@@ -246,11 +255,15 @@ def run_dispatcher(config_path: Path | None) -> int:
                     )
                 log.info("Service stopped")
             except Exception as exc:
-                setup_logging("info", folder=cfg_path.resolve().parent / "logs", to_console=False)
+                if not log.handlers:
+                    setup_logging("info", folder=cfg_path.resolve().parent / "logs", to_console=False)
                 log.exception("Service failed")
                 servicemanager.LogErrorMsg(f"{APP_NAME} failed: {exc}")
-                # Leaving SvcDoRun ends the service; raising makes the SCM report a failure and restart it.
-                raise
+                for handler in log.handlers:
+                    handler.flush()
+                # End the process without reporting a clean stop: the SCM sees an unexpected termination and
+                # applies the recovery actions (restart after 5 s / 5 s / 30 s), e.g. once the port is free again.
+                os._exit(1)
 
     servicemanager.Initialize()
     servicemanager.PrepareToHostSingle(PortraitQAService)

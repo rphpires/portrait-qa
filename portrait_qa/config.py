@@ -79,8 +79,10 @@ class Settings:
             raise ConfigError("detector.score_threshold must be between 0.1 and 0.99")
         if not 160 <= self.detector.max_side <= 2048:
             raise ConfigError("detector.max_side must be between 160 and 2048")
-        if not 0 <= self.quality.min_score <= 100:
-            raise ConfigError("quality.min_score must be between 0 and 100")
+        try:
+            self.quality.validate()
+        except ValueError as exc:
+            raise ConfigError(f"quality: {exc}") from exc
         for profile in self.profiles.values():
             try:
                 profile.validate()
@@ -109,34 +111,56 @@ def _profile_dict(p: OutputProfile) -> dict:
     return data
 
 
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _coerce(annotation: str, value, where: str):
+    """Check ``value`` against a field annotation (as written in the dataclass) and return it normalized."""
+    optional = annotation.endswith("| None")
+    base = annotation.removesuffix("| None").strip()
+    if value is None:
+        if optional:
+            return None
+        raise ConfigError(f"{where} must not be null")
+    if base == "bool":
+        if isinstance(value, bool):
+            return value
+    elif base == "int":
+        if _is_number(value) and float(value).is_integer():
+            return int(value)
+    elif base == "float":
+        if _is_number(value):
+            return float(value)
+    elif base == "str":
+        if isinstance(value, str):
+            return value
+    elif base == "list[str]":
+        if isinstance(value, list) and all(isinstance(v, str) for v in value):
+            return list(value)
+    elif base == "tuple[int, int, int]":
+        if (
+            isinstance(value, (list, tuple))
+            and len(value) == 3
+            and all(_is_number(v) and float(v).is_integer() for v in value)
+        ):
+            return tuple(int(v) for v in value)
+    else:  # pragma: no cover - a new field type needs a rule here
+        raise AssertionError(f"no type rule for {annotation!r} ({where})")
+    expected = {"tuple[int, int, int]": "a list of 3 integers", "list[str]": "a list of strings"}.get(base, base)
+    raise ConfigError(f"{where} must be {expected}{' or null' if optional else ''}, got {json.dumps(value)}")
+
+
 def _build(cls, data, section: str):
     if not isinstance(data, dict):
         raise ConfigError(f"{section} must be an object")
-    known = {f.name for f in fields(cls)}
-    unknown = set(data) - known
+    known = {f.name: f for f in fields(cls)}
+    unknown = set(data) - set(known)
     if unknown:
         raise ConfigError(f"unknown key(s) in {section}: {', '.join(sorted(unknown))}")
-    defaults = cls.__dataclass_fields__
-    for key, value in data.items():
-        default = defaults[key].default
-        if value is None and "None" in str(defaults[key].type):
-            continue
-        if isinstance(default, bool):
-            ok = isinstance(value, bool)
-        elif isinstance(default, (int, float)) and not isinstance(default, bool):
-            ok = isinstance(value, (int, float)) and not isinstance(value, bool)
-            if ok and isinstance(default, int) and not isinstance(value, int):
-                ok = float(value).is_integer()
-                if ok:
-                    data = {**data, key: int(value)}
-        elif isinstance(default, str):
-            ok = isinstance(value, str)
-        else:
-            ok = True
-        if not ok:
-            raise ConfigError(f"{section}.{key} has the wrong type ({type(value).__name__})")
+    values = {key: _coerce(str(known[key].type), value, f"{section}.{key}") for key, value in data.items()}
     try:
-        return cls(**data)
+        return cls(**values)
     except TypeError as exc:  # pragma: no cover - defensive
         raise ConfigError(f"{section}: {exc}") from exc
 
@@ -155,18 +179,17 @@ def from_dict(data: dict) -> Settings:
     for name, raw in raw_profiles.items():
         if not isinstance(raw, dict):
             raise ConfigError(f"profiles.{name} must be an object")
-        raw = {**raw, "name": name}
-        if isinstance(raw.get("background"), list):
-            raw["background"] = tuple(raw["background"])
-        profiles[name] = _build(OutputProfile, raw, f"profiles.{name}")
+        if "name" in raw:
+            raise ConfigError(f"profiles.{name}: the profile name is the key; remove 'name'")
+        profiles[name] = _build(OutputProfile, {**raw, "name": name}, f"profiles.{name}")
     settings = Settings(
         server=_build(ServerSettings, data.get("server", {}), "server"),
         limits=_build(LimitSettings, data.get("limits", {}), "limits"),
         detector=_build(DetectorSettings, data.get("detector", {}), "detector"),
         quality=_build(QualityThresholds, data.get("quality", {}), "quality"),
-        default_profile=data.get("default_profile", "default"),
+        default_profile=_coerce("str", data.get("default_profile", "default"), "default_profile"),
         profiles=profiles,
-        log_level=data.get("log_level", "info"),
+        log_level=_coerce("str", data.get("log_level", "info"), "log_level"),
     )
     settings.validate()
     return settings

@@ -138,15 +138,18 @@ def crop(image: np.ndarray, face: Face, profile: OutputProfile) -> CropResult:
     img_h, img_w = image.shape[:2]
     x, y, cw, ch = crop_box(face, (img_w, img_h), profile)
     x0, y0 = int(round(x)), int(round(y))
-    x1, y1 = int(round(x + cw)), int(round(y + ch))
-    pad_left, pad_top = max(0, -x0), max(0, -y0)
-    pad_right, pad_bottom = max(0, x1 - img_w), max(0, y1 - img_h)
-    padded = any((pad_left, pad_top, pad_right, pad_bottom))
-    region = image[max(0, y0) : min(img_h, y1), max(0, x0) : min(img_w, x1)]
+    x1, y1 = max(x0 + 1, int(round(x + cw))), max(y0 + 1, int(round(y + ch)))
+    # Paste the part of the image inside the crop rectangle onto a background-filled canvas: works for any
+    # position, including rectangles that extend past (or lie partly outside) the image.
+    ix0, iy0, ix1, iy1 = max(0, x0), max(0, y0), min(img_w, x1), min(img_h, y1)
+    padded = ix0 != x0 or iy0 != y0 or ix1 != x1 or iy1 != y1
     if padded:
-        region = cv2.copyMakeBorder(
-            region, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_CONSTANT, value=profile.background
-        )
+        region = np.empty((y1 - y0, x1 - x0, 3), np.uint8)
+        region[:] = profile.background
+        if ix1 > ix0 and iy1 > iy0:
+            region[iy0 - y0 : iy1 - y0, ix0 - x0 : ix1 - x0] = image[iy0:iy1, ix0:ix1]
+    else:
+        region = image[y0:y1, x0:x1]
     upscaled = region.shape[1] < profile.width
     interp = cv2.INTER_CUBIC if upscaled else cv2.INTER_AREA
     out = cv2.resize(region, (profile.width, profile.height), interpolation=interp)

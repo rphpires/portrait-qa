@@ -52,8 +52,8 @@ _SHARPNESS_STD = 40.0
 class QualityThresholds:
     min_score: int = 60
     min_confidence: float = 0.75
-    min_eye_distance_px: float = 40  # below: error FACE_TOO_SMALL
-    good_eye_distance_px: float = 90  # below: warning LOW_RESOLUTION (a commonly cited minimum for ID portraits)
+    min_eye_distance_px: float = 40.0  # below: error FACE_TOO_SMALL
+    good_eye_distance_px: float = 90.0  # below: warning LOW_RESOLUTION (a commonly cited minimum for ID portraits)
     secondary_face_ratio: float = 0.35  # another face at least this wide (vs. the main one) = MULTIPLE_FACES
     max_yaw_ratio: float = 0.35
     min_sharpness: float = 15.0  # variance of the Laplacian on the face, normalized in size and contrast
@@ -63,6 +63,29 @@ class QualityThresholds:
     min_contrast: float = 22.0  # std of L on the face
     max_overexposed_fraction: float = 0.08  # share of face pixels with L >= 250
     max_lighting_imbalance: float = 45.0  # |mean L left half - right half|
+
+    def validate(self) -> None:
+        """Raise ValueError on limits that would make the checks meaningless (or crash the score)."""
+        if not 0 <= self.min_score <= 100:
+            raise ValueError("min_score must be between 0 and 100")
+        if not 0 < self.min_confidence <= 1:
+            raise ValueError("min_confidence must be in (0, 1]")
+        if not 0 < self.min_eye_distance_px <= self.good_eye_distance_px:
+            raise ValueError("need 0 < min_eye_distance_px <= good_eye_distance_px")
+        if not 0 < self.secondary_face_ratio <= 1:
+            raise ValueError("secondary_face_ratio must be in (0, 1]")
+        if not 0 < self.max_yaw_ratio <= 2:
+            raise ValueError("max_yaw_ratio must be in (0, 2]")
+        if not 0 < self.min_sharpness < self.good_sharpness:
+            raise ValueError("need 0 < min_sharpness < good_sharpness")
+        if not 0 <= self.min_brightness < self.max_brightness <= 255:
+            raise ValueError("need 0 <= min_brightness < max_brightness <= 255")
+        if not 0 < self.min_contrast <= 128:
+            raise ValueError("min_contrast must be in (0, 128]")
+        if not 0 < self.max_overexposed_fraction <= 1:
+            raise ValueError("max_overexposed_fraction must be in (0, 1]")
+        if not 0 < self.max_lighting_imbalance <= 255:
+            raise ValueError("max_lighting_imbalance must be in (0, 255]")
 
 
 @dataclass
@@ -117,22 +140,31 @@ def _ramp(value: float, bad: float, good: float) -> float:
     return min(1.0, max(0.0, (value - bad) / (good - bad)))
 
 
-def _face_region(image: np.ndarray, face: Face) -> np.ndarray:
-    """Inner part of the face box (drops hair/background at the borders)."""
+def _clamp_box(x0: float, y0: float, x1: float, y1: float, width: int, height: int) -> tuple[int, int, int, int]:
+    x0, x1 = (int(min(max(v, 0), width)) for v in (x0, x1))
+    y0, y1 = (int(min(max(v, 0), height)) for v in (y0, y1))
+    return x0, y0, x1, y1
+
+
+def _face_region(image: np.ndarray, face: Face) -> tuple[np.ndarray, int]:
+    """Inner part of the face box (drops hair/background at the borders), clamped to the image.
+
+    Returns the region and its left edge in image coordinates. Never empty for a detector-clipped face.
+    """
     height, width = image.shape[:2]
     inset_x, inset_y = face.width * 0.12, face.height * 0.08
-    x0 = int(max(0, face.x + inset_x))
-    y0 = int(max(0, face.y + inset_y))
-    x1 = int(min(width, face.x + face.width - inset_x))
-    y1 = int(min(height, face.y + face.height - inset_y))
-    if x1 - x0 < 4 or y1 - y0 < 4:
-        x0, y0 = int(max(0, face.x)), int(max(0, face.y))
-        x1, y1 = int(min(width, face.x + face.width)), int(min(height, face.y + face.height))
-    return image[y0:y1, x0:x1]
+    box = _clamp_box(face.x + inset_x, face.y + inset_y, face.x + face.width - inset_x,
+                     face.y + face.height - inset_y, width, height)  # fmt: skip
+    if box[2] - box[0] < 4 or box[3] - box[1] < 4:
+        box = _clamp_box(face.x, face.y, face.x + face.width, face.y + face.height, width, height)
+    x0, y0, x1, y1 = box
+    if x1 - x0 < 1 or y1 - y0 < 1:
+        raise ValueError("face region is outside the image")
+    return image[y0:y1, x0:x1], x0
 
 
 def measure(image: np.ndarray, face: Face) -> FaceMetrics:
-    region = _face_region(image, face)
+    region, region_x = _face_region(image, face)
     gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
     scale = _SHARPNESS_WIDTH / gray.shape[1]
     interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
@@ -144,7 +176,7 @@ def measure(image: np.ndarray, face: Face) -> FaceMetrics:
     sharpness = float(cv2.Laplacian(norm, cv2.CV_64F).var())
 
     lum = cv2.cvtColor(region, cv2.COLOR_BGR2LAB)[:, :, 0].astype(np.float64)
-    split = int(min(max(face.nose[0] - (face.x + face.width * 0.12), 1), lum.shape[1] - 1))
+    split = int(min(max(face.nose[0] - region_x, 1), lum.shape[1] - 1))  # at the nose, in region coordinates
     left, right = lum[:, :split], lum[:, split:]
     imbalance = abs(float(left.mean()) - float(right.mean())) if left.size and right.size else 0.0
 

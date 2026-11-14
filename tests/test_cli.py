@@ -55,4 +55,28 @@ def test_bad_config_is_reported(tmp_path, capsys):
     cfg = tmp_path / "config.json"
     cfg.write_text('{"server": {"port": "x"}}')
     assert main(["--config", str(cfg), "assess", str(IMAGES / "astronaut.png")]) == 2
-    assert "wrong type" in capsys.readouterr().err
+    assert "server.port must be int" in capsys.readouterr().err
+
+
+def test_assess_keeps_the_worst_exit_code(tmp_path, capsys):
+    cfg = str(tmp_path / "c.json")
+    assert main(["--config", cfg, "assess", str(tmp_path / "missing.jpg"), str(IMAGES / "cat.png")]) == 2
+
+
+def test_crop_creates_the_output_folder(tmp_path, capsys):
+    out = tmp_path / "new" / "dir" / "face.jpg"
+    assert main(["--config", str(tmp_path / "c.json"), "crop", str(IMAGES / "astronaut.png"), "-o", str(out)]) == 0
+    assert out.exists()
+
+
+def test_batch_does_not_overwrite_crops_with_the_same_stem(tmp_path, variants, capsys):
+    src = tmp_path / "in"
+    src.mkdir()
+    cv2.imwrite(str(src / "a.png"), variants["large"])
+    cv2.imwrite(str(src / "a.jpg"), variants["large"])
+    cv2.imwrite(str(src / "b.png"), variants["large"])
+    out = tmp_path / "out"
+    assert main(["--config", str(tmp_path / "c.json"), "batch", str(src), "-o", str(out), "-q"]) == 0
+    rows = {r["file"]: r["cropped"] for r in csv.DictReader((out / "portrait-qa-report.csv").open(encoding="utf-8"))}
+    assert rows == {"a.jpg": "a.jpg.jpg", "a.png": "a.png.jpg", "b.png": "b.jpg"}
+    assert all((out / name).exists() for name in rows.values())

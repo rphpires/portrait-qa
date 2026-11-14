@@ -113,15 +113,22 @@ class FaceDetector:
         if raw is None:
             return []
         inv = 1.0 / scale
+        img_h, img_w = image.shape[:2]
         faces = []
         for row in raw:
             v = [float(c) * inv for c in row[:14]]
+            # YuNet can return boxes that extend past the image; clip them, and drop detections that are
+            # mostly outside (they cannot be measured or cropped meaningfully).
+            x0, y0 = max(0.0, v[0]), max(0.0, v[1])
+            x1, y1 = min(float(img_w), v[0] + v[2]), min(float(img_h), v[1] + v[3])
+            if x1 - x0 < 4 or y1 - y0 < 4 or (x1 - x0) * (y1 - y0) < 0.5 * v[2] * v[3]:
+                continue
             faces.append(
                 Face(
-                    x=v[0],
-                    y=v[1],
-                    width=v[2],
-                    height=v[3],
+                    x=x0,
+                    y=y0,
+                    width=x1 - x0,
+                    height=y1 - y0,
                     confidence=float(row[14]),
                     right_eye=(v[4], v[5]),
                     left_eye=(v[6], v[7]),

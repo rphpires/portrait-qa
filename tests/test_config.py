@@ -47,9 +47,19 @@ def test_utf8_bom_is_accepted(tmp_path):
     [
         ({"serverr": {}}, "unknown key"),
         ({"server": {"prot": 1}}, "unknown key"),
-        ({"server": {"port": "8080"}}, "wrong type"),
+        ({"server": {"port": "8080"}}, "server.port must be int"),
         ({"server": {"port": 70000}}, "port"),
-        ({"server": {"port": 80.5}}, "wrong type"),
+        ({"server": {"port": 80.5}}, "server.port must be int"),
+        ({"server": {"cors_origins": "https://app.example"}}, "list of strings"),
+        ({"server": {"api_key": None}}, "must not be null"),
+        ({"profiles": {"x": {"width": 300, "height": 400, "background": "abc"}}}, "list of 3 integers"),
+        ({"profiles": {"x": {"width": 300, "height": 400, "background": [1, 2, [3]]}}}, "list of 3 integers"),
+        ({"profiles": {"x": {"width": 300, "height": 400, "name": "y"}}}, "remove 'name'"),
+        ({"log_level": 5}, "log_level must be str"),
+        ({"default_profile": ["a"]}, "default_profile must be str"),
+        ({"quality": {"min_sharpness": -5}}, "min_sharpness"),
+        ({"quality": {"min_brightness": 200, "max_brightness": 100}}, "brightness"),
+        ({"quality": {"min_eye_distance_px": 100}}, "eye_distance"),
         ({"quality": {"min_score": 150}}, "min_score"),
         ({"default_profile": "nope"}, "not a known profile"),
         ({"profiles": {"x": {"width": 300}}}, "profiles.x"),
@@ -67,6 +77,12 @@ def test_invalid_config(tmp_path, data, message):
 def test_invalid_json_reports_the_line(tmp_path):
     with pytest.raises(ConfigError, match="line 2"):
         config.load(write(tmp_path, None, raw='{\n  "server": ,\n}'))
+
+
+def test_decimals_and_integral_floats(tmp_path):
+    s = config.load(write(tmp_path, {"quality": {"min_eye_distance_px": 45.5}, "server": {"port": 9000.0}}))
+    assert s.quality.min_eye_distance_px == 45.5
+    assert s.server.port == 9000 and isinstance(s.server.port, int)
 
 
 def test_null_max_kb_is_allowed(tmp_path):

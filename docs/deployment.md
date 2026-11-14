@@ -11,8 +11,10 @@
      Windows Firewall.
    - **Port:** **Check** binds the port to see if it is free. If another program holds it, the window says so
      and offers the next free port. A port held by Portrait QA itself is accepted (reconfiguring).
-4. **Install and start** saves `config.json`, installs the `PortraitQA` service (automatic start, restart on
-   failure after 5 s / 5 s / 30 s), starts it, and waits until `/v1/health` answers.
+4. **Install and start** saves `config.json`, installs the `PortraitQA` service (automatic start, restart after
+   a crash or a failed start: 5 s, 5 s, then every 30 s), starts it, and waits until `/v1/health` answers.
+   A failed start (invalid `config.json`, port taken by another program) is logged in `logs\portrait-qa.log`
+   and in the Windows Application event log, and retried.
 5. The **Endpoints** box lists the URLs with **Copy** buttons. **Open test page** opens `/` in the browser to
    try a photo.
 
@@ -113,4 +115,5 @@ the executable (Windows build) or in the current directory.
   for the request, never writes them to disk, and does not log them.
 - In network mode the API key is required. It travels in plain HTTP, so use the service on a trusted network,
   or put it behind a reverse proxy with TLS (IIS ARR, nginx, Caddy) when traffic crosses untrusted networks.
-- Uploads are limited in size and pixel count, and only JPEG/PNG/BMP/WebP signatures are decoded.
+- Uploads are limited in size while they are read (chunked bodies included) and in pixel count before decoding
+  (from the file header), and only JPEG/PNG/BMP/WebP signatures are decoded.

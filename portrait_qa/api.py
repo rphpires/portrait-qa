@@ -69,22 +69,40 @@ def _error(status: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": {"code": code, "message": message}})
 
 
+async def read_body(request: Request, max_bytes: int) -> bytes:
+    """Read the body, refusing it as soon as it exceeds ``max_bytes`` (works without Content-Length, e.g.
+    chunked uploads). The body is cached on the request so ``request.form()`` can parse it afterwards."""
+    length = request.headers.get("content-length")
+    if length and length.isdigit() and int(length) > max_bytes:
+        raise ImageTooLargeError(f"Request body is too large; the limit is {max_bytes / 1e6:.1f} MB.")
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > max_bytes:
+            raise ImageTooLargeError(f"Request body is too large; the limit is {max_bytes / 1e6:.1f} MB.")
+        chunks.append(chunk)
+    body = b"".join(chunks)
+    request._body = body  # Starlette reads a cached body from here (stream(), body(), form())
+    return body
+
+
 async def read_image(request: Request, max_bytes: int) -> bytes:
     """Extract the image bytes from any of the accepted body formats."""
-    length = request.headers.get("content-length")
-    # Base64 and multipart add overhead; refuse obviously oversized bodies before reading them.
-    if length and length.isdigit() and int(length) > max_bytes * 1.4 + 64 * 1024:
-        raise ImageTooLargeError(f"Request body is too large; the image limit is {max_bytes / 1e6:.1f} MB.")
+    # Base64 and multipart add overhead on top of the image limit.
+    body = await read_body(request, int(max_bytes * 1.4) + 64 * 1024)
     ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
     if ctype == "multipart/form-data":
-        form = await request.form()
+        try:
+            form = await request.form()
+        except Exception:  # malformed multipart: python-multipart raises various errors
+            raise InvalidImageError("Malformed multipart body.") from None
         upload = form.get("image")
         if upload is None or isinstance(upload, str):
             raise InvalidImageError("Multipart body must have a file field named 'image'.")
         return await upload.read()
     if ctype == "application/json":
         try:
-            payload = json.loads(await request.body())
+            payload = json.loads(body)
         except (json.JSONDecodeError, UnicodeDecodeError):
             raise InvalidImageError("Body is not valid JSON.") from None
         value = payload.get("image_base64") if isinstance(payload, dict) else None
@@ -92,12 +110,13 @@ async def read_image(request: Request, max_bytes: int) -> bytes:
             raise InvalidImageError("JSON body must have a non-empty 'image_base64' string.")
         if value.startswith("data:"):
             value = value.partition(",")[2]
+        value = "".join(value.split())  # base64 wrapped at 64/76 columns (openssl, MIME) is common
         try:
             return base64.b64decode(value, validate=True)
         except (binascii.Error, ValueError):
             raise InvalidImageError("'image_base64' is not valid base64.") from None
     if ctype.startswith("image/") or ctype in ("application/octet-stream", ""):
-        return await request.body()
+        return body
     raise InvalidImageError(f"Unsupported Content-Type {ctype!r}; use multipart/form-data, JSON or image/*.")
 
 
@@ -125,15 +144,6 @@ def create_app(settings: Settings, engine: Engine | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.settings = settings
 
-    if settings.server.cors_origins:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=settings.server.cors_origins,
-            allow_methods=["GET", "POST"],
-            allow_headers=["*"],
-            expose_headers=["X-Portrait-Passed", "X-Portrait-Score", "X-Portrait-Issues"],
-        )
-
     @app.middleware("http")
     async def auth_and_log(request: Request, call_next):
         start = time.perf_counter()
@@ -150,6 +160,16 @@ def create_app(settings: Settings, engine: Engine | None = None) -> FastAPI:
         log.info("%s %s %s %.0fms from %s", request.method, request.url.path, response.status_code,
                  (time.perf_counter() - start) * 1000, _client(request))  # fmt: skip
         return response
+
+    # Added after the auth middleware, so it wraps it: 401 answers carry CORS headers too.
+    if settings.server.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.server.cors_origins,
+            allow_methods=["GET", "POST"],
+            allow_headers=["*"],
+            expose_headers=["X-Portrait-Passed", "X-Portrait-Score", "X-Portrait-Issues"],
+        )
 
     @app.exception_handler(PortraitQAError)
     async def domain_error(_request: Request, exc: PortraitQAError):

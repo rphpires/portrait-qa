@@ -205,3 +205,50 @@ def test_cors(good):
     client = TestClient(create_app(s))
     r = client.options("/v1/assess", headers={"Origin": "https://app.example", "Access-Control-Request-Method": "POST"})
     assert r.headers["access-control-allow-origin"] == "https://app.example"
+
+
+def test_chunked_upload_over_the_limit_is_refused(good):
+    """No Content-Length (chunked): the limit is enforced while reading."""
+    s = Settings()
+    s.limits.max_upload_mb = 0.05
+    client = TestClient(create_app(s))
+
+    def body():
+        for _ in range(100):
+            yield b"\xff" * 10_000
+
+    r = client.post("/v1/assess", content=body(), headers={"Content-Type": "image/jpeg"})
+    assert r.status_code == 413 and r.json()["error"]["code"] == "IMAGE_TOO_LARGE"
+
+
+def test_chunked_upload_within_the_limit_works(client, good):
+    def body():
+        for i in range(0, len(good), 4096):
+            yield good[i : i + 4096]
+
+    r = client.post("/v1/assess", content=body(), headers={"Content-Type": "image/jpeg"})
+    assert r.status_code == 200 and r.json()["passed"] is True
+
+
+def test_wrapped_base64_is_accepted(client, good):
+    wrapped = base64.encodebytes(good).decode()  # newline every 76 characters
+    assert "\n" in wrapped
+    assert client.post("/v1/assess", json={"image_base64": wrapped}).json()["passed"] is True
+
+
+def test_unauthorized_answer_has_cors_headers(good):
+    s = Settings()
+    s.server.api_key = "k" * 20
+    s.server.cors_origins = ["https://app.example"]
+    client = TestClient(create_app(s))
+    r = client.post("/v1/assess", files={"image": ("p.jpg", good)}, headers={"Origin": "https://app.example"})
+    assert r.status_code == 401
+    assert r.headers["access-control-allow-origin"] == "https://app.example"
+
+
+def test_transparent_png_upload(client, portrait):
+    rgba = cv2.cvtColor(portrait, cv2.COLOR_BGR2BGRA)
+    rgba[:, :40, 3] = 0  # transparent strip on the left
+    data = cv2.imencode(".png", rgba)[1].tobytes()
+    r = client.post("/v1/crop", files={"image": ("p.png", data, "image/png")})
+    assert r.status_code == 200 and r.json()["faces"] == 1

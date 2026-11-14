@@ -25,7 +25,10 @@ Every `POST` endpoint takes the image in any of these forms (JPEG, PNG, BMP or W
 | `application/json` | `{"image_base64": "<base64>"}`; a `data:image/jpeg;base64,` prefix is accepted |
 | `image/jpeg`, `image/png`, `application/octet-stream` | the raw bytes |
 
-EXIF orientation (photos taken with a phone held upright) is applied before anything else.
+EXIF orientation (photos taken with a phone held upright) is applied before anything else. Transparent areas
+(PNG/WebP with alpha) are filled with white. Base64 may be wrapped in lines (MIME/openssl style). The pixel
+limit is checked from the file header, before the image is decoded, and the body size while it is read
+(chunked uploads included).
 
 ## Endpoints
 

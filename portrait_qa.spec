@@ -22,7 +22,7 @@ a = Analysis(
     pathex=["."],
     datas=datas,
     hiddenimports=hidden,
-    excludes=["PIL", "matplotlib", "pytest", "IPython", "pandas", "scipy"],
+    excludes=["matplotlib", "pytest", "IPython", "pandas", "scipy"],
 )
 # OpenCV's FFmpeg plugin (~30 MB) is only used for video I/O, which this service never does.
 a.binaries = [b for b in a.binaries if "opencv_videoio_ffmpeg" not in b[0]]

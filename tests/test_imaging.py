@@ -31,7 +31,7 @@ def test_decode_round_trip(portrait):
     [
         (b"", "Empty"),
         (b"hello world, not an image", "Unsupported format"),
-        (b"\xff\xd8\xff" + b"\x00" * 100, "could not be decoded"),
+        (b"\xff\xd8\xff" + b"\x00" * 100, "could not be"),
     ],
 )
 def test_decode_invalid(data, message):
@@ -45,6 +45,55 @@ def test_decode_size_limits(portrait):
         imaging.decode(data, max_bytes=len(data) - 1, max_pixels=LIMITS["max_pixels"])
     with pytest.raises(ImageTooLargeError, match="megapixels"):
         imaging.decode(data, max_bytes=LIMITS["max_bytes"], max_pixels=512 * 512 - 1)
+
+
+def test_pixel_bomb_is_refused_from_the_header():
+    """A ~400 KB PNG declaring 20000x20000 pixels must be refused without allocating the image."""
+    import zlib
+
+    try:
+        import resource  # Unix only: the memory check is skipped on Windows, the refusal is not
+    except ImportError:
+        resource = None
+
+    width = height = 20000
+    raw = zlib.compress(b"".join(b"\x00" + bytes(width) for _ in range(height)), 9)
+
+    def chunk(kind, body):
+        return len(body).to_bytes(4, "big") + kind + body + zlib.crc32(kind + body).to_bytes(4, "big")
+
+    ihdr = width.to_bytes(4, "big") + height.to_bytes(4, "big") + bytes([8, 0, 0, 0, 0])
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", raw) + chunk(b"IEND", b"")
+    before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss if resource else 0
+    with pytest.raises(ImageTooLargeError, match="20000x20000"):
+        imaging.decode(png, **LIMITS)
+    if resource:
+        grown_mb = (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before) / 1024
+        assert grown_mb < 100
+
+
+def png_bytes(array) -> bytes:
+    return cv2.imencode(".png", array)[1].tobytes()
+
+
+def test_transparent_png_is_composited_on_white():
+    rgba = np.zeros((60, 40, 4), np.uint8)
+    rgba[:, :20] = (0, 0, 255, 255)  # opaque red on the left, fully transparent (black) on the right
+    image = imaging.decode(png_bytes(rgba), **LIMITS)
+    assert image.shape == (60, 40, 3)
+    assert tuple(image[10, 5]) == (0, 0, 255)
+    assert tuple(image[10, 35]) == (255, 255, 255)
+
+
+def test_gray_alpha_and_16_bit_pngs():
+    ga = Image.new("LA", (30, 20), (0, 0))
+    buf = io.BytesIO()
+    ga.save(buf, "PNG")
+    image = imaging.decode(buf.getvalue(), **LIMITS)
+    assert image.shape == (20, 30, 3) and image.min() == 255
+    deep = np.full((20, 30, 3), 65535, np.uint16)
+    image = imaging.decode(png_bytes(deep), **LIMITS)
+    assert image.dtype == np.uint8 and image.min() == 255
 
 
 def test_exif_orientation_is_applied(portrait):

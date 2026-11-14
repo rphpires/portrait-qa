@@ -51,7 +51,7 @@ def cmd_assess(args) -> int:
             result = engine.run(Path(path).read_bytes(), mode="assess")
             data = {"file": str(path), **result.report.to_dict()}
             if not result.report.passed:
-                status = 1
+                status = max(status, 1)
         except (PortraitQAError, OSError) as exc:
             data = {"file": str(path), "error": getattr(exc, "code", "IO_ERROR"), "message": str(exc)}
             status = 2
@@ -67,9 +67,24 @@ def cmd_crop(args) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(result.crop.jpeg)
     print(json.dumps({"file": str(args.file), "out": str(out), **result.report.to_dict(), "crop": result.crop.info()}))
     return 0 if result.report.passed else 1
+
+
+def _crop_targets(src: Path, files: list[Path]) -> dict[Path, Path]:
+    """Output name of each crop, relative to the output folder: ``photo.png`` -> ``photo.jpg``. When two
+    sources would collide (``a.png`` and ``a.jpg``), both keep their extension: ``a.png.jpg``, ``a.jpg.jpg``."""
+    plain = {p: p.relative_to(src).with_suffix(".jpg") for p in files}
+    counts: dict[str, int] = {}
+    for target in plain.values():
+        key = target.as_posix().lower()  # Windows file names are case-insensitive
+        counts[key] = counts.get(key, 0) + 1
+    return {
+        p: (t if counts[t.as_posix().lower()] == 1 else p.relative_to(src).with_name(p.name + ".jpg"))
+        for p, t in plain.items()
+    }
 
 
 def cmd_batch(args) -> int:
@@ -81,6 +96,7 @@ def cmd_batch(args) -> int:
     if out_dir:
         out_dir.mkdir(parents=True, exist_ok=True)
     report_path = Path(args.report) if args.report else (out_dir or src) / "portrait-qa-report.csv"
+    targets = _crop_targets(src, files)
     mode = "process" if out_dir else "assess"
     counts = {"passed": 0, "failed": 0, "error": 0}
     with report_path.open("w", newline="", encoding="utf-8") as fh:
@@ -93,7 +109,7 @@ def cmd_batch(args) -> int:
                 r = result.report
                 cropped = ""
                 if result.crop is not None and out_dir:
-                    target = (out_dir / path.relative_to(src)).with_suffix(".jpg")
+                    target = out_dir / targets[path]
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(result.crop.jpeg)
                     cropped = target.relative_to(out_dir).as_posix()
