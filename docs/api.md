@@ -183,8 +183,13 @@ else
 import base64, requests
 
 with open("photo.jpg", "rb") as f:
-    r = requests.post("http://server:8080/v1/process", params={"profile": "badge"},
-                      headers={"X-API-Key": key}, files={"image": f}, timeout=30)
+    r = requests.post(
+        "http://server:8080/v1/process",
+        params={"profile": "badge"},
+        headers={"X-API-Key": key},
+        files={"image": f},
+        timeout=30,
+    )
 r.raise_for_status()
 data = r.json()
 if data["passed"]:
