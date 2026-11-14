@@ -36,7 +36,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 
 It installs the dev and build extras, runs the tests, and runs PyInstaller with `portrait_qa.spec`. Output:
 `dist\PortraitQA\` with `PortraitQA.exe` (setup window), `portrait-qa.exe` (CLI and service host),
-`_internal\`, README and LICENSE. About 150 MB, most of it OpenCV; the spec drops OpenCV's FFmpeg plugin
+`_internal\`, README and LICENSE. About 165 MB (72 MB zipped), most of it OpenCV; the spec drops OpenCV's FFmpeg plugin
 (video only, ~30 MB). Zip the folder to distribute it.
 
 Checked on Windows Server (win-server-2) before each release:
